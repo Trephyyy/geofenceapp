@@ -22,9 +22,9 @@ class DbService {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, 'geofence.db');
 
-    return await openDatabase(
+    _db = await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE IF NOT EXISTS places (
@@ -64,6 +64,17 @@ class DbService {
             timestamp INTEGER NOT NULL
           )
         ''');
+
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS event_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp INTEGER NOT NULL,
+            type TEXT NOT NULL,
+            place_id TEXT,
+            place_label TEXT,
+            message TEXT NOT NULL
+          )
+        ''');
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -71,8 +82,23 @@ class DbService {
             await db.execute("ALTER TABLE places ADD COLUMN trigger_type TEXT NOT NULL DEFAULT 'normal'");
           } catch (_) {}
         }
+        if (oldVersion < 3) {
+          try {
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS event_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                place_id TEXT,
+                place_label TEXT,
+                message TEXT NOT NULL
+              )
+            ''');
+          } catch (_) {}
+        }
       },
     );
+    return _db!;
   }
 
   // --- Places CRUD ---
@@ -203,5 +229,33 @@ class DbService {
       where: 'timestamp < ?',
       whereArgs: [time.millisecondsSinceEpoch],
     );
+  }
+
+  // --- Event Logs CRUD ---
+
+  Future<void> insertEventLog(Map<String, dynamic> log) async {
+    final db = await database;
+    await db.insert('event_logs', log);
+  }
+
+  Future<List<Map<String, dynamic>>> getEventLogs({int limit = 200}) async {
+    final db = await database;
+    final result = await db.query(
+      'event_logs',
+      orderBy: 'timestamp DESC',
+      limit: limit,
+    );
+    return result;
+  }
+
+  Future<void> clearEventLogs() async {
+    final db = await database;
+    await db.delete('event_logs');
+  }
+
+  Future<int> getEventLogCount() async {
+    final db = await database;
+    final result = await db.rawQuery('SELECT COUNT(*) as count FROM event_logs');
+    return Sqflite.firstIntValue(result) ?? 0;
   }
 }

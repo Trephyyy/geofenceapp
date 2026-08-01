@@ -14,20 +14,28 @@ import com.google.android.gms.location.LocationServices
 
 object GeofenceManager {
     private const val TAG = "GeofenceManager"
+    private const val LOITERING_DELAY_MS: Int = 120000
+    private const val NOTIFICATION_RESPONSIVENESS_MS: Int = 30000
 
     fun registerGeofence(context: Context, id: String, lat: Double, lng: Double, radius: Float) {
-        Log.d(TAG, "Registering geofence: $id at ($lat, $lng) with radius ${radius}m")
+        if (!PrivacyConsentManager.hasConsent(context)) {
+            Log.w(TAG, "Consent not granted, skipping geofence registration: $id")
+            return
+        }
+        Log.d(TAG, "Registering geofence: $id with radius ${radius}m")
         val geofencingClient = LocationServices.getGeofencingClient(context)
-        
+
         val geofence = Geofence.Builder()
             .setRequestId(id)
             .setCircularRegion(lat, lng, radius)
             .setExpirationDuration(Geofence.NEVER_EXPIRE)
-            .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER or Geofence.GEOFENCE_TRANSITION_EXIT)
+            .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_DWELL or Geofence.GEOFENCE_TRANSITION_EXIT)
+            .setLoiteringDelay(LOITERING_DELAY_MS)
+            .setNotificationResponsiveness(NOTIFICATION_RESPONSIVENESS_MS)
             .build()
 
         val request = GeofencingRequest.Builder()
-            .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER)
+            .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_DWELL)
             .addGeofence(geofence)
             .build()
 
@@ -55,8 +63,7 @@ object GeofenceManager {
     fun unregisterGeofence(context: Context, id: String) {
         Log.d(TAG, "Unregistering geofence: $id")
         val geofencingClient = LocationServices.getGeofencingClient(context)
-        
-        // Remove by request ID
+
         geofencingClient.removeGeofences(listOf(id))
             .addOnSuccessListener {
                 Log.d(TAG, "Geofence removed by ID successfully: $id")
@@ -73,10 +80,24 @@ object GeofenceManager {
         }
     }
 
+    fun reRegisterAllGeofencesFromDb(context: Context) {
+        val dbHelper = DbHelper(context)
+        val places = dbHelper.getConfirmedPlaces()
+        dbHelper.close()
+        if (places.isNotEmpty()) {
+            Log.d(TAG, "Re-registering ${places.size} geofences from DB on startup")
+            registerAllGeofences(context, places)
+        }
+    }
+
     fun startActivityRecognition(context: Context) {
+        if (!PrivacyConsentManager.hasConsent(context)) {
+            Log.w(TAG, "Consent not granted, skipping activity recognition start")
+            return
+        }
         Log.d(TAG, "Registering Activity Recognition Transitions")
         val activityRecognitionClient = ActivityRecognition.getClient(context)
-        
+
         val transitions = mutableListOf<ActivityTransition>()
         transitions.add(
             ActivityTransition.Builder()
@@ -132,8 +153,7 @@ object GeofenceManager {
                     Log.d(TAG, "Activity transitions removed successfully")
                     val prefs = context.getSharedPreferences("geofence_prefs", Context.MODE_PRIVATE)
                     prefs.edit().putBoolean("learning_mode_active", false).apply()
-                    
-                    // Stop ongoing location sampling
+
                     ActivityTransitionReceiver.setStillState(context, false)
                     ActivityTransitionReceiver.stopLocationSampling(context)
                 }

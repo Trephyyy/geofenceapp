@@ -3,7 +3,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/native_geofence_service.dart';
-import 'dashboard_screen.dart';
+import '../widgets/app_shell.dart';
 
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
@@ -17,12 +17,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final NativeGeofenceService _geofenceService = NativeGeofenceService();
   int _currentStep = 0;
 
-  // Permission statuses
   bool _hasForegroundLocation = false;
   bool _hasBackgroundLocation = false;
   bool _hasActivityRecognition = false;
   bool _hasNotification = false;
   bool _isBatteryExempt = false;
+  bool _privacyConsentGranted = false;
 
   bool get _isAndroid => Platform.isAndroid;
 
@@ -32,11 +32,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _checkPermissionStatuses();
   }
 
-  int get _totalSteps => _isAndroid ? 6 : 4;
+  int get _totalSteps => _isAndroid ? 7 : 5;
 
   List<String> get _stepIds => _isAndroid
-      ? ['welcome', 'foreground', 'background', 'activity', 'notification', 'battery']
-      : ['welcome', 'foreground', 'background', 'notification'];
+      ? ['welcome', 'privacy', 'foreground', 'background', 'activity', 'notification', 'battery']
+      : ['welcome', 'privacy', 'foreground', 'background', 'notification'];
 
   Future<void> _checkPermissionStatuses() async {
     final foreground = await Permission.locationWhenInUse.isGranted;
@@ -51,6 +51,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       battery = await _geofenceService.isIgnoreBatteryOptimizations();
     }
 
+    final consent = await _geofenceService.hasConsent();
+
     if (mounted) {
       setState(() {
         _hasForegroundLocation = foreground;
@@ -58,6 +60,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         _hasActivityRecognition = activity;
         _hasNotification = notification;
         _isBatteryExempt = battery;
+        _privacyConsentGranted = consent;
       });
     }
   }
@@ -84,12 +87,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _finishOnboarding() async {
-    // Start background learning mode
+    await _geofenceService.grantConsent();
     await _geofenceService.startLearning();
 
     if (mounted) {
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const DashboardScreen()),
+        MaterialPageRoute(builder: (_) => const AppShell()),
       );
     }
   }
@@ -97,11 +100,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F1A), // Sleek deep space dark background
+      backgroundColor: const Color(0xFF0F0F1A),
       body: SafeArea(
         child: Column(
           children: [
-            // Progress Bar
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
               child: ClipRRect(
@@ -109,7 +111,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 child: LinearProgressIndicator(
                   value: (_currentStep + 1) / _totalSteps,
                   backgroundColor: const Color(0xFF1F1F35),
-                  valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF8A2BE2)), // Vibrant violet
+                  valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF8A2BE2)),
                   minHeight: 6,
                 ),
               ),
@@ -126,7 +128,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 children: _buildSteps(),
               ),
             ),
-            // Footer Navigation
             Padding(
               padding: const EdgeInsets.all(24.0),
               child: Row(
@@ -135,9 +136,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   if (_currentStep > 0)
                     TextButton(
                       onPressed: _previousPage,
-                      style: TextButton.styleFrom(
-                        foregroundColor: Colors.white70,
-                      ),
+                      style: TextButton.styleFrom(foregroundColor: Colors.white70),
                       child: const Text('Back', style: TextStyle(fontSize: 16)),
                     )
                   else
@@ -150,13 +149,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       disabledBackgroundColor: const Color(0xFF2E2E4A),
                       disabledForegroundColor: Colors.white24,
                       padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       elevation: 0,
                     ),
-child: Text(
-                        _currentStep == _totalSteps - 1 ? 'Get Started' : 'Continue',
+                    child: Text(
+                      _currentStep == _totalSteps - 1 ? 'Get Started' : 'Continue',
                       style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                     ),
                   ),
@@ -172,12 +169,13 @@ child: Text(
   List<Widget> _buildSteps() {
     final steps = <Widget>[
       _buildWelcomeStep(),
+      _buildPrivacyStep(),
       _buildForegroundLocationStep(),
       _buildBackgroundLocationStep(),
       _buildNotificationStep(),
     ];
     if (_isAndroid) {
-      steps.insert(3, _buildActivityStep());
+      steps.insert(4, _buildActivityStep());
       steps.add(_buildBatteryStep());
     }
     return steps;
@@ -188,6 +186,8 @@ child: Text(
     switch (stepId) {
       case 'welcome':
         return true;
+      case 'privacy':
+        return _privacyConsentGranted;
       case 'foreground':
         return _hasForegroundLocation;
       case 'background':
@@ -203,8 +203,6 @@ child: Text(
     }
   }
 
-  // --- Step Builders ---
-
   Widget _buildStepContainer({
     required IconData icon,
     required Color iconColor,
@@ -219,22 +217,14 @@ child: Text(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           const SizedBox(height: 40),
-          // Icon Container
           Container(
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
-              color: iconColor.withValues(alpha:0.08),
+              color: iconColor.withValues(alpha: 0.08),
               shape: BoxShape.circle,
-              border: Border.all(
-                color: iconColor.withValues(alpha:0.2),
-                width: 2,
-              ),
+              border: Border.all(color: iconColor.withValues(alpha: 0.2), width: 2),
             ),
-            child: Icon(
-              icon,
-              size: 64,
-              color: iconColor,
-            ),
+            child: Icon(icon, size: 64, color: iconColor),
           ),
           const SizedBox(height: 40),
           Text(
@@ -251,11 +241,7 @@ child: Text(
           Text(
             description,
             textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Color(0xFFA0A0C0),
-              fontSize: 15,
-              height: 1.5,
-            ),
+            style: const TextStyle(color: Color(0xFFA0A0C0), fontSize: 15, height: 1.5),
           ),
           const SizedBox(height: 48),
           ...actionContent,
@@ -273,14 +259,60 @@ child: Text(
       description: 'A silent time tracker. ClockIt auto-detects places you visit, clusters them on-device, and silently tracks your arrival and departure times using geofencing.',
       actionContent: [
         const Text(
-          'Let\'s set up the required permissions to run quietly and efficiently in the background.',
+          "Let's set up the required permissions to run quietly and efficiently in the background.",
           textAlign: TextAlign.center,
-          style: TextStyle(
-            color: Color(0xFF8A8A9E),
-            fontSize: 14,
-            fontStyle: FontStyle.italic,
-          ),
+          style: TextStyle(color: Color(0xFF8A8A9E), fontSize: 14, fontStyle: FontStyle.italic),
         ),
+      ],
+    );
+  }
+
+  Widget _buildPrivacyStep() {
+    return _buildStepContainer(
+      icon: Icons.shield_outlined,
+      iconColor: const Color(0xFF00F5D4),
+      title: 'Privacy Consent',
+      description: 'Your location data stays on-device. No third-party analytics, no cloud uploads. Data is encrypted at rest using SQLCipher with a device-specific key.',
+      actionContent: [
+        if (_privacyConsentGranted)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1E3A2F),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFF2E6B4F), width: 1),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: const [
+                Icon(Icons.check, color: Color(0xFF52B788)),
+                SizedBox(width: 8),
+                Text(
+                  'Consent Granted',
+                  style: TextStyle(color: Color(0xFFD8F3DC), fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+          )
+        else
+          ElevatedButton.icon(
+            onPressed: () async {
+              await _geofenceService.grantConsent();
+              setState(() => _privacyConsentGranted = true);
+            },
+            icon: const Icon(Icons.check_circle_outline),
+            label: const Text('I Agree — Enable Privacy Mode'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2A2A44),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+                side: const BorderSide(color: Color(0xFF3F3F6B), width: 1),
+              ),
+              elevation: 0,
+            ),
+          ),
       ],
     );
   }
@@ -298,9 +330,7 @@ child: Text(
           ElevatedButton.icon(
             onPressed: () async {
               final status = await Permission.locationWhenInUse.request();
-              setState(() {
-                _hasForegroundLocation = status.isGranted;
-              });
+              setState(() => _hasForegroundLocation = status.isGranted);
             },
             icon: const Icon(Icons.check_circle_outline),
             label: const Text('Grant Location Access'),
@@ -322,17 +352,16 @@ child: Text(
         else
           ElevatedButton.icon(
             onPressed: () async {
-              // Staged flow: foreground must be granted first.
               if (!_hasForegroundLocation) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Please grant foreground location first.')),
+                  const SnackBar(
+                    content: Text('Please grant foreground location first.', style: TextStyle(color: Colors.white)),
+                  ),
                 );
                 return;
               }
               final status = await Permission.locationAlways.request();
-              setState(() {
-                _hasBackgroundLocation = status.isGranted;
-              });
+              setState(() => _hasBackgroundLocation = status.isGranted);
             },
             icon: const Icon(Icons.lock_open),
             label: const Text('Allow All The Time'),
@@ -347,7 +376,7 @@ child: Text(
       icon: Icons.directions_run_outlined,
       iconColor: const Color(0xFFFF007F),
       title: '3. Physical Activity',
-      description: 'We use the platform\'s activity detection API to recognize when you are STILL vs when you are moving. Location samples are only taken when you are stationary, saving up to 90% battery.',
+      description: "We use the platform's activity detection API to recognize when you are STILL vs when you are moving. Location samples are only taken when you are stationary, saving up to 90% battery.",
       actionContent: [
         if (_hasActivityRecognition)
           _buildPermissionGrantedWidget()
@@ -355,9 +384,7 @@ child: Text(
           ElevatedButton.icon(
             onPressed: () async {
               final status = await Permission.activityRecognition.request();
-              setState(() {
-                _hasActivityRecognition = status.isGranted;
-              });
+              setState(() => _hasActivityRecognition = status.isGranted);
             },
             icon: const Icon(Icons.run_circle_outlined),
             label: const Text('Grant Activity Access'),
@@ -380,9 +407,7 @@ child: Text(
           ElevatedButton.icon(
             onPressed: () async {
               final status = await Permission.notification.request();
-              setState(() {
-                _hasNotification = status.isGranted;
-              });
+              setState(() => _hasNotification = status.isGranted);
             },
             icon: const Icon(Icons.notifications_none_outlined),
             label: const Text('Allow Notifications'),
@@ -397,7 +422,7 @@ child: Text(
       icon: Icons.battery_charging_full_rounded,
       iconColor: const Color(0xFF9B5DE5),
       title: '5. Battery Optimization',
-      description: 'Android\'s Doze mode can sleep our background tasks, delaying geofence triggers. Exclude ClockIt from battery optimization to guarantee timely logs. (iOS manages background tasks automatically.)',
+      description: "Android's Doze mode can sleep our background tasks, delaying geofence triggers. Exclude ClockIt from battery optimization to guarantee timely logs.",
       actionContent: [
         if (_isBatteryExempt)
           _buildPermissionGrantedWidget()
@@ -408,14 +433,9 @@ child: Text(
               ElevatedButton(
                 onPressed: () async {
                   await _geofenceService.requestIgnoreBatteryOptimizations();
-                  // Check status again after a short delay
                   Future.delayed(const Duration(seconds: 2), () async {
                     final isExempt = await _geofenceService.isIgnoreBatteryOptimizations();
-                    if (mounted) {
-                      setState(() {
-                        _isBatteryExempt = isExempt;
-                      });
-                    }
+                    if (mounted) setState(() => _isBatteryExempt = isExempt);
                   });
                 },
                 style: _permissionButtonStyle(),
@@ -446,10 +466,7 @@ child: Text(
         children: const [
           Icon(Icons.check, color: Color(0xFF52B788)),
           SizedBox(width: 8),
-          Text(
-            'Permission Granted',
-            style: TextStyle(color: Color(0xFFD8F3DC), fontWeight: FontWeight.bold),
-          ),
+          Text('Permission Granted', style: TextStyle(color: Color(0xFFD8F3DC), fontWeight: FontWeight.bold)),
         ],
       ),
     );

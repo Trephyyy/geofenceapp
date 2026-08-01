@@ -6,6 +6,7 @@ import '../models/place.dart';
 import '../models/visit.dart';
 import '../repositories/place_repository.dart';
 import '../repositories/visit_repository.dart';
+import '../services/event_logger_service.dart';
 
 class PlaceDetailScreen extends StatefulWidget {
   final Place place;
@@ -19,6 +20,7 @@ class PlaceDetailScreen extends StatefulWidget {
 class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
   final PlaceRepository _placeRepository = PlaceRepository();
   final VisitRepository _visitRepository = VisitRepository();
+  final EventLoggerService _logger = EventLoggerService();
 
   late Place _currentPlace;
   late TextEditingController _labelController;
@@ -31,6 +33,9 @@ class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
   bool _isLoadingVisits = true;
   bool _isSaving = false;
   bool _isDragging = false;
+  bool _editMode = false;
+  bool _hasDraftChanges = false;
+  late LatLng _draftCenter;
 
   final MapController _mapController = MapController();
 
@@ -43,6 +48,7 @@ class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
     _radius = _currentPlace.radiusM;
     _triggerType = _currentPlace.triggerType;
     _mapCenter = LatLng(_currentPlace.lat, _currentPlace.lng);
+    _draftCenter = _mapCenter;
     _loadVisits();
   }
 
@@ -72,12 +78,31 @@ class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
   void _showSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Text(message, style: const TextStyle(color: Colors.white)),
         backgroundColor: const Color(0xFF1F1F35),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     );
+  }
+
+  void _toggleEditMode() {
+    setState(() {
+      _editMode = !_editMode;
+      if (!_editMode && _hasDraftChanges) {
+        _draftCenter = _mapCenter;
+        _hasDraftChanges = false;
+      }
+    });
+  }
+
+  void _saveDraftCenter() {
+    setState(() {
+      _mapCenter = _draftCenter;
+      _editMode = false;
+      _hasDraftChanges = false;
+      _isDragging = false;
+    });
   }
 
   IconData _getIconData(PlaceIcon icon) {
@@ -129,6 +154,7 @@ class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
       setState(() {
         _currentPlace = updated;
       });
+      _logger.logGeofenceRegistered(updated.label);
       _showSnackBar('Changes saved successfully');
     } catch (e) {
       _showSnackBar('Failed to save changes');
@@ -172,6 +198,7 @@ class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
       setState(() => _isSaving = true);
       try {
         await _placeRepository.deletePlace(_currentPlace.id);
+        _logger.logPlaceDeleted(_currentPlace.label);
         _showSnackBar('Place deleted');
         if (mounted) {
           Navigator.of(context).pop(true); // Return true to indicate change
@@ -220,6 +247,7 @@ class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
       setState(() => _isSaving = true);
       try {
         await _placeRepository.reEnterLearningMode(_currentPlace);
+        _logger.logGeofenceUnregistered(_currentPlace.label);
         _showSnackBar('Place reset to learning mode');
         if (mounted) {
           Navigator.of(context).pop(true); // Return true to indicate change
@@ -322,16 +350,20 @@ class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
             ),
         ],
       ),
-      body: SingleChildScrollView(
+      body: SafeArea(
+        child: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // 1. Map View Header (Draggable - tap to reposition geofence)
             Container(
               height: 280,
-              decoration: const BoxDecoration(
+              decoration: BoxDecoration(
                 border: Border(
-                  bottom: BorderSide(color: Color(0xFF22223C), width: 1),
+                  bottom: BorderSide(
+                    color: _editMode ? iconColor : const Color(0xFF22223C),
+                    width: 1.5,
+                  ),
                 ),
               ),
               child: Stack(
@@ -344,12 +376,12 @@ class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
                       minZoom: 12,
                       maxZoom: 18,
                       onPositionChanged: (camera, hasGesture) {
-                        if (hasGesture) {
-                          setState(() {
-                            _mapCenter = camera.center;
-                            _isDragging = true;
-                          });
-                        }
+                        if (!_editMode || !hasGesture) return;
+                        setState(() {
+                          _draftCenter = camera.center;
+                          _hasDraftChanges = true;
+                          _isDragging = true;
+                        });
                       },
                     ),
                     children: [
@@ -361,10 +393,14 @@ class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
                       CircleLayer(
                         circles: [
                           CircleMarker(
-                            point: _mapCenter,
-                            color: iconColor.withValues(alpha:0.25),
-                            borderStrokeWidth: 2,
-                            borderColor: iconColor,
+                            point: _editMode ? _draftCenter : _mapCenter,
+                            color: _editMode
+                                ? iconColor.withValues(alpha: 0.12)
+                                : iconColor.withValues(alpha: 0.25),
+                            borderStrokeWidth: _editMode ? 2.0 : 1.5,
+                            borderColor: _editMode
+                                ? iconColor.withValues(alpha: 0.5)
+                                : iconColor,
                             useRadiusInMeter: true,
                             radius: _radius,
                           ),
@@ -373,7 +409,7 @@ class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
                       MarkerLayer(
                         markers: [
                           Marker(
-                            point: _mapCenter,
+                            point: _editMode ? _draftCenter : _mapCenter,
                             width: 40,
                             height: 40,
                             child: Container(
@@ -400,6 +436,81 @@ class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
                       ),
                     ],
                   ),
+                  // Edit mode toggle
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: GestureDetector(
+                      onTap: _toggleEditMode,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: _editMode
+                              ? const Color(0xFFFFA726)
+                              : const Color(0xFF2A2A44),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _editMode
+                                  ? Icons.lock_open
+                                  : Icons.lock_outline,
+                              color: _editMode ? Colors.black : Colors.white70,
+                              size: 14,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              _editMode ? 'Editing' : 'Edit Location',
+                              style: TextStyle(
+                                color: _editMode ? Colors.black : Colors.white70,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Save draft button
+                  if (_editMode && _hasDraftChanges)
+                    Positioned(
+                      bottom: 8,
+                      right: 8,
+                      child: GestureDetector(
+                        onTap: _saveDraftCenter,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: iconColor,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.check, color: Colors.white, size: 14),
+                              SizedBox(width: 4),
+                              Text(
+                                'Save',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                   // Dragging indicator
                   if (_isDragging)
                     Positioned(
@@ -415,7 +526,7 @@ class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
-                          '${_mapCenter.latitude.toStringAsFixed(4)}, ${_mapCenter.longitude.toStringAsFixed(4)}',
+                          '${(_editMode ? _draftCenter : _mapCenter).latitude.toStringAsFixed(4)}, ${(_editMode ? _draftCenter : _mapCenter).longitude.toStringAsFixed(4)}',
                           style: const TextStyle(
                             color: Color(0xFF00F5D4),
                             fontSize: 11,
@@ -718,6 +829,7 @@ class _PlaceDetailScreenState extends State<PlaceDetailScreen> {
               ),
             ),
           ],
+          ),
         ),
       ),
     );

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../models/place.dart';
 import '../services/db_service.dart';
 import '../services/native_geofence_service.dart';
+import '../services/event_logger_service.dart';
 import '../repositories/place_repository.dart';
 
 class DeveloperPanelScreen extends StatefulWidget {
@@ -17,6 +18,7 @@ class _DeveloperPanelScreenState extends State<DeveloperPanelScreen> with Single
   final DbService _dbService = DbService();
   final PlaceRepository _placeRepository = PlaceRepository();
   final NativeGeofenceService _geofenceService = NativeGeofenceService();
+  final EventLoggerService _logger = EventLoggerService();
 
   late TabController _tabController;
   final TextEditingController _importController = TextEditingController();
@@ -69,7 +71,7 @@ class _DeveloperPanelScreenState extends State<DeveloperPanelScreen> with Single
   void _showSnackBar(String message, {bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Text(message, style: const TextStyle(color: Colors.white)),
         backgroundColor: isError ? Colors.red.shade900 : const Color(0xFF1E3A2F),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -214,6 +216,7 @@ class _DeveloperPanelScreenState extends State<DeveloperPanelScreen> with Single
           await txn.delete('learning_points');
         });
 
+        _logger.logHistoryPurged();
         _showSnackBar('Database wiped successfully.');
         _loadExportData();
       } catch (e) {
@@ -231,10 +234,6 @@ class _DeveloperPanelScreenState extends State<DeveloperPanelScreen> with Single
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
         title: const Text('Developer Settings', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         bottom: TabBar(
           controller: _tabController,
@@ -248,16 +247,18 @@ class _DeveloperPanelScreenState extends State<DeveloperPanelScreen> with Single
           ],
         ),
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF6C63FF)))
-          : TabBarView(
-              controller: _tabController,
-              children: [
-                _buildExportTab(),
-                _buildImportTab(),
-                _buildResetTab(),
-              ],
-            ),
+      body: SafeArea(
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator(color: Color(0xFF6C63FF)))
+            : TabBarView(
+                controller: _tabController,
+                children: [
+                  _buildExportTab(),
+                  _buildImportTab(),
+                  _buildResetTab(),
+                ],
+              ),
+      ),
     );
   }
 

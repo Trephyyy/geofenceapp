@@ -3,29 +3,40 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'services/db_service.dart';
+import 'services/native_geofence_service.dart';
+import 'services/location_native_bridge.dart';
+import 'services/event_logger_service.dart';
 import 'screens/onboarding_screen.dart';
-import 'screens/dashboard_screen.dart';
+import 'widgets/app_shell.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize sqlite database schema on launch
   final dbService = DbService();
   await dbService.initDb();
 
-  // Check if permissions are already set up to bypass onboarding
+  final bridge = LocationNativeBridge();
+  bridge.init();
+
+  final nativeService = NativeGeofenceService();
+
+  final consentGranted = await nativeService.hasConsent();
+
   final hasForeground = await Permission.locationWhenInUse.isGranted;
   final hasBackground = await Permission.locationAlways.isGranted;
 
   bool onboardingCompleted = hasForeground && hasBackground;
 
-  // Activity recognition is Android-only
   if (Platform.isAndroid) {
     final hasActivity = await Permission.activityRecognition.isGranted;
     onboardingCompleted = onboardingCompleted && hasActivity;
   }
 
-  runApp(MyApp(onboardingCompleted: onboardingCompleted));
+  if (onboardingCompleted && consentGranted) {
+    EventLoggerService().logSystem('App started');
+  }
+
+  runApp(MyApp(onboardingCompleted: onboardingCompleted && consentGranted));
 }
 
 class MyApp extends StatelessWidget {
@@ -49,11 +60,13 @@ class MyApp extends StatelessWidget {
           onSurface: Colors.white,
         ),
         textTheme: const TextTheme(
-          titleLarge: TextStyle(fontFamily: 'Outfit', fontWeight: FontWeight.bold),
-          bodyLarge: TextStyle(fontFamily: 'Inter'),
+          titleLarge: TextStyle(fontWeight: FontWeight.bold),
+          bodyLarge: TextStyle(),
         ),
       ),
-      home: onboardingCompleted ? const DashboardScreen() : const OnboardingScreen(),
+      home: onboardingCompleted
+          ? const AppShell()
+          : const OnboardingScreen(),
     );
   }
 }

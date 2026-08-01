@@ -6,6 +6,7 @@ import '../models/place.dart';
 import '../repositories/place_repository.dart';
 import '../services/clustering_service.dart';
 import '../services/db_service.dart';
+import '../services/event_logger_service.dart';
 
 class SuggestedPlacesScreen extends StatefulWidget {
   const SuggestedPlacesScreen({super.key});
@@ -17,6 +18,7 @@ class SuggestedPlacesScreen extends StatefulWidget {
 class _SuggestedPlacesScreenState extends State<SuggestedPlacesScreen> {
   final ClusteringService _clusteringService = ClusteringService();
   final PlaceRepository _placeRepository = PlaceRepository();
+  final EventLoggerService _logger = EventLoggerService();
 
   List<SuggestedCluster> _suggestions = [];
   bool _isLoading = true;
@@ -44,7 +46,7 @@ class _SuggestedPlacesScreenState extends State<SuggestedPlacesScreen> {
     setState(() => _isLoading = true);
     try {
       final clusters = await _clusteringService.getSuggestedPlaces();
-      
+
       // Initialize form controllers for each cluster
       _labelControllers.clear();
       _selectedIcons.clear();
@@ -69,7 +71,7 @@ class _SuggestedPlacesScreenState extends State<SuggestedPlacesScreen> {
   void _showSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Text(message, style: const TextStyle(color: Colors.white)),
         backgroundColor: const Color(0xFF1F1F35),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -107,10 +109,16 @@ class _SuggestedPlacesScreenState extends State<SuggestedPlacesScreen> {
       await _placeRepository.addPlace(newPlace);
 
       // 2. Purge corresponding learning points from DB so they exit the sampling pool
-      await _clusteringService.purgeLearningPointsWithin(cluster.lat, cluster.lng, radius + 150.0);
+      await _clusteringService.purgeLearningPointsWithin(
+        cluster.lat,
+        cluster.lng,
+        radius + 150.0,
+      );
 
+      _logger.logPlaceConfirmed(label);
+      _logger.logGeofenceRegistered(label);
       _showSnackBar('Place "$label" confirmed and geofence registered!');
-      
+
       // Reload suggestions
       await _loadSuggestions();
     } catch (e) {
@@ -155,7 +163,10 @@ class _SuggestedPlacesScreenState extends State<SuggestedPlacesScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white),
+          icon: const Icon(
+            Icons.arrow_back_ios_new_rounded,
+            color: Colors.white,
+          ),
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: const Text(
@@ -163,11 +174,15 @@ class _SuggestedPlacesScreenState extends State<SuggestedPlacesScreen> {
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF6C63FF)))
-          : _suggestions.isEmpty
-              ? _buildEmptyState()
-              : _buildSuggestionsList(),
+      body: SafeArea(
+        child: _isLoading
+            ? const Center(
+                child: CircularProgressIndicator(color: Color(0xFF6C63FF)),
+              )
+            : _suggestions.isEmpty
+            ? _buildEmptyState()
+            : _buildSuggestionsList(),
+      ),
     );
   }
 
@@ -179,17 +194,29 @@ class _SuggestedPlacesScreenState extends State<SuggestedPlacesScreen> {
           mainAxisAlignment: MainAxisAlignment.center,
           crossAxisAlignment: CrossAxisAlignment.center,
           children: const [
-            Icon(Icons.query_stats_outlined, size: 72, color: Color(0xFF3F3F6B)),
+            Icon(
+              Icons.query_stats_outlined,
+              size: 72,
+              color: Color(0xFF3F3F6B),
+            ),
             SizedBox(height: 24),
             Text(
               'No new suggestions',
-              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
             ),
             SizedBox(height: 12),
             Text(
               'Our background clustering engine needs more stationary data. Suggestions will appear once we detect places you visit at least 3 times for over 20 minutes.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Color(0xFFA0A0C0), fontSize: 14, height: 1.5),
+              style: TextStyle(
+                color: Color(0xFFA0A0C0),
+                fontSize: 14,
+                height: 1.5,
+              ),
             ),
           ],
         ),
@@ -237,14 +264,17 @@ class _SuggestedPlacesScreenState extends State<SuggestedPlacesScreen> {
                 ),
                 children: [
                   TileLayer(
-                    urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                    urlTemplate:
+                        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                     userAgentPackageName: 'com.example.geofenceapp',
                   ),
                   CircleLayer(
                     circles: [
                       CircleMarker(
                         point: mapCenter,
-                        color: _getIconColor(selectedIcon).withValues(alpha:0.25),
+                        color: _getIconColor(
+                          selectedIcon,
+                        ).withValues(alpha: 0.25),
                         borderStrokeWidth: 2,
                         borderColor: _getIconColor(selectedIcon),
                         useRadiusInMeter: true,
@@ -255,7 +285,7 @@ class _SuggestedPlacesScreenState extends State<SuggestedPlacesScreen> {
                 ],
               ),
             ),
-            
+
             // Info Header
             Padding(
               padding: const EdgeInsets.all(16.0),
@@ -267,17 +297,28 @@ class _SuggestedPlacesScreenState extends State<SuggestedPlacesScreen> {
                     children: [
                       Text(
                         'Location Hotspot #${index + 1}',
-                        style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
                         decoration: BoxDecoration(
                           color: const Color(0xFF1F1F3D),
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Text(
                           '${cluster.visitCount} visits',
-                          style: const TextStyle(color: Color(0xFF00BBF9), fontSize: 12, fontWeight: FontWeight.bold),
+                          style: const TextStyle(
+                            color: Color(0xFF00BBF9),
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
                     ],
@@ -285,15 +326,22 @@ class _SuggestedPlacesScreenState extends State<SuggestedPlacesScreen> {
                   const SizedBox(height: 6),
                   Text(
                     'Avg. Dwell time: ${cluster.averageDurationMinutes.toStringAsFixed(0)} mins',
-                    style: const TextStyle(color: Color(0xFFA0A0C0), fontSize: 12),
+                    style: const TextStyle(
+                      color: Color(0xFFA0A0C0),
+                      fontSize: 12,
+                    ),
                   ),
-                  
+
                   const Divider(color: Color(0xFF22223C), height: 24),
-                  
+
                   // Label field
                   const Text(
                     'Place Label',
-                    style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   const SizedBox(height: 8),
                   TextField(
@@ -301,10 +349,16 @@ class _SuggestedPlacesScreenState extends State<SuggestedPlacesScreen> {
                     style: const TextStyle(color: Colors.white, fontSize: 14),
                     decoration: InputDecoration(
                       hintText: 'e.g. Work, Gym, Home',
-                      hintStyle: const TextStyle(color: Colors.white30, fontSize: 14),
+                      hintStyle: const TextStyle(
+                        color: Colors.white30,
+                        fontSize: 14,
+                      ),
                       fillColor: const Color(0xFF0F0F1A),
                       filled: true,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(10),
                         borderSide: const BorderSide(color: Color(0xFF22223C)),
@@ -319,13 +373,17 @@ class _SuggestedPlacesScreenState extends State<SuggestedPlacesScreen> {
                       ),
                     ),
                   ),
-                  
+
                   const SizedBox(height: 16),
 
                   // Icon Row Selector
                   const Text(
                     'Select Category Icon',
-                    style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   const SizedBox(height: 8),
                   Row(
@@ -343,10 +401,14 @@ class _SuggestedPlacesScreenState extends State<SuggestedPlacesScreen> {
                           duration: const Duration(milliseconds: 200),
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: isSelected ? iconColor.withValues(alpha:0.12) : const Color(0xFF0F0F1A),
+                            color: isSelected
+                                ? iconColor.withValues(alpha: 0.12)
+                                : const Color(0xFF0F0F1A),
                             borderRadius: BorderRadius.circular(10),
                             border: Border.all(
-                              color: isSelected ? iconColor : const Color(0xFF22223C),
+                              color: isSelected
+                                  ? iconColor
+                                  : const Color(0xFF22223C),
                               width: 1.5,
                             ),
                           ),
@@ -368,11 +430,19 @@ class _SuggestedPlacesScreenState extends State<SuggestedPlacesScreen> {
                     children: [
                       const Text(
                         'Geofence Radius',
-                        style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       Text(
                         '${currentRadius.toInt()}m',
-                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ],
                   ),
@@ -389,7 +459,7 @@ class _SuggestedPlacesScreenState extends State<SuggestedPlacesScreen> {
                       });
                     },
                   ),
-                  
+
                   const SizedBox(height: 8),
 
                   // Confirm button
@@ -401,7 +471,9 @@ class _SuggestedPlacesScreenState extends State<SuggestedPlacesScreen> {
                         backgroundColor: const Color(0xFF6C63FF),
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
                         elevation: 0,
                       ),
                       child: const Text(
@@ -420,9 +492,12 @@ class _SuggestedPlacesScreenState extends State<SuggestedPlacesScreen> {
   }
 }
 
-// Add the helper method to ClusteringService to purge points
 extension PurgeLearningPoints on ClusteringService {
-  Future<void> purgeLearningPointsWithin(double lat, double lng, double radiusM) async {
+  Future<void> purgeLearningPointsWithin(
+    double lat,
+    double lng,
+    double radiusM,
+  ) async {
     final dbService = DbService();
     final points = await dbService.getAllLearningPoints();
     for (final p in points) {

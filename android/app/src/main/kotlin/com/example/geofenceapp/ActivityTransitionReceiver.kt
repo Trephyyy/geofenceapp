@@ -4,6 +4,8 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.google.android.gms.location.ActivityTransition
 import com.google.android.gms.location.ActivityTransitionResult
@@ -39,10 +41,9 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
         }
 
         fun startLocationSampling(context: Context) {
-            Log.d(TAG, "Starting location sampling...")
+            Log.d(TAG, "Starting location sampling for STILL snapshot...")
             val locationClient = LocationServices.getFusedLocationProviderClient(context)
-            
-            // Build balanced power accuracy request for 10 minutes interval
+
             val locationRequest = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 10 * 60 * 1000L)
                 .setMinUpdateIntervalMillis(5 * 60 * 1000L)
                 .setMaxUpdateDelayMillis(10 * 60 * 1000L)
@@ -51,21 +52,9 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
             try {
                 locationClient.requestLocationUpdates(locationRequest, getLocationPendingIntent(context))
                 Log.d(TAG, "Location updates requested successfully")
-                
-                // Immediately grab the current location to bootstrap this still session
-                locationClient.lastLocation.addOnSuccessListener { location ->
-                    if (location != null) {
-                        saveLearningPoint(context, location.latitude, location.longitude)
-                    } else {
-                        // If last location is null, try to query current location
-                        locationClient.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, null)
-                            .addOnSuccessListener { curLoc ->
-                                if (curLoc != null) {
-                                    saveLearningPoint(context, curLoc.latitude, curLoc.longitude)
-                                }
-                            }
-                    }
-                }
+
+                // Immediately request a single high-accuracy fix
+                LocationUpdateReceiver.requestSingleStillFix(context)
             } catch (e: SecurityException) {
                 Log.e(TAG, "Cannot start location updates due to missing permission", e)
             }
@@ -73,23 +62,20 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
 
         fun stopLocationSampling(context: Context) {
             Log.d(TAG, "Stopping location sampling...")
+            DebugLogger.d("LOCATION", "Location sampling stopped.")
             val locationClient = LocationServices.getFusedLocationProviderClient(context)
             try {
                 locationClient.removeLocationUpdates(getLocationPendingIntent(context))
                 Log.d(TAG, "Location updates removed successfully")
             } catch (e: Exception) {
                 Log.e(TAG, "Error removing location updates", e)
+                DebugLogger.e("LOCATION", "Error removing location updates", throwable = e)
             }
-        }
-
-        private fun saveLearningPoint(context: Context, lat: Double, lng: Double) {
-            val dbHelper = DbHelper(context)
-            dbHelper.insertLearningPoint(lat, lng, System.currentTimeMillis())
-            dbHelper.close()
         }
     }
 
     override fun onReceive(context: Context, intent: Intent) {
+        DebugLogger.init(context)
         Log.d(TAG, "Received activity transition intent")
         if (ActivityTransitionResult.hasResult(intent)) {
             val result = ActivityTransitionResult.extractResult(intent) ?: return
@@ -97,10 +83,12 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
                 if (event.activityType == DetectedActivity.STILL) {
                     if (event.transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER) {
                         Log.d(TAG, "Activity Transition: ENTER STILL")
+                        DebugLogger.i("LOCATION", "ActivityTransition: ENTER STILL. Starting location sampling.")
                         setStillState(context, true)
                         startLocationSampling(context)
                     } else if (event.transitionType == ActivityTransition.ACTIVITY_TRANSITION_EXIT) {
                         Log.d(TAG, "Activity Transition: EXIT STILL")
+                        DebugLogger.i("LOCATION", "ActivityTransition: EXIT STILL. Stopping location sampling.")
                         setStillState(context, false)
                         stopLocationSampling(context)
                     }

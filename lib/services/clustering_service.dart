@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'db_service.dart';
+import 'native_geofence_service.dart';
 import '../models/learning_point.dart';
 import '../models/place.dart';
 
@@ -24,7 +25,8 @@ class StationarySession {
     lng = sumLng / points.length;
   }
 
-  int get durationMs => points.last.timestamp.difference(points.first.timestamp).inMilliseconds;
+  int get durationMs =>
+      points.last.timestamp.difference(points.first.timestamp).inMilliseconds;
   DateTime get startTime => points.first.timestamp;
   DateTime get endTime => points.last.timestamp;
 }
@@ -55,13 +57,15 @@ class ClusteringService {
   ClusteringService._internal();
 
   final DbService _dbService = DbService();
+  final NativeGeofenceService _geofenceService = NativeGeofenceService();
 
   /// Calculate distance in meters using Haversine formula
   double calculateDistance(double lat1, double lng1, double lat2, double lng2) {
     const p = 0.017453292519943295; // Math.PI / 180
-    final a = 0.5 - cos((lat2 - lat1) * p) / 2 +
-        cos(lat1 * p) * cos(lat2 * p) *
-        (1 - cos((lng2 - lng1) * p)) / 2;
+    final a =
+        0.5 -
+        cos((lat2 - lat1) * p) / 2 +
+        cos(lat1 * p) * cos(lat2 * p) * (1 - cos((lng2 - lng1) * p)) / 2;
     return 12742000 * asin(sqrt(a)); // 2 * R; R = 6371000 m
   }
 
@@ -85,7 +89,7 @@ class ClusteringService {
       } else {
         final lastPoint = currentSessionPoints.last;
         final gap = p.timestamp.difference(lastPoint.timestamp).inMinutes;
-        
+
         if (gap <= 20) {
           currentSessionPoints.add(p);
         } else {
@@ -114,7 +118,12 @@ class ClusteringService {
       double minDistance = mergeRadiusMeters;
 
       for (final cluster in clusters) {
-        final distance = calculateDistance(session.lat, session.lng, cluster.lat, cluster.lng);
+        final distance = calculateDistance(
+          session.lat,
+          session.lng,
+          cluster.lat,
+          cluster.lng,
+        );
         if (distance < minDistance) {
           minDistance = distance;
           nearestCluster = cluster;
@@ -123,7 +132,7 @@ class ClusteringService {
 
       if (nearestCluster != null) {
         nearestCluster.sessions.add(session);
-        
+
         // Recalculate cluster centroid
         double sumLat = 0;
         double sumLng = 0;
@@ -134,17 +143,21 @@ class ClusteringService {
         nearestCluster.lat = sumLat / nearestCluster.sessions.length;
         nearestCluster.lng = sumLng / nearestCluster.sessions.length;
       } else {
-        clusters.add(SuggestedCluster(
-          lat: session.lat,
-          lng: session.lng,
-          sessions: [session],
-        ));
+        clusters.add(
+          SuggestedCluster(
+            lat: session.lat,
+            lng: session.lng,
+            sessions: [session],
+          ),
+        );
       }
     }
 
     // 4. Fetch confirmed places to filter out clusters that overlap
     final places = await _dbService.getAllPlaces();
-    final confirmedPlaces = places.where((p) => p.status == PlaceStatus.confirmed).toList();
+    final confirmedPlaces = places
+        .where((p) => p.status == PlaceStatus.confirmed)
+        .toList();
 
     // 5. Filter clusters by minimum visits and exclude already confirmed areas
     return clusters.where((cluster) {
@@ -153,12 +166,26 @@ class ClusteringService {
 
       // Must not overlap with an existing confirmed place (within radius + merge offset)
       for (final place in confirmedPlaces) {
-        final distance = calculateDistance(cluster.lat, cluster.lng, place.lat, place.lng);
+        final distance = calculateDistance(
+          cluster.lat,
+          cluster.lng,
+          place.lat,
+          place.lng,
+        );
         if (distance < (place.radiusM + mergeRadiusMeters)) {
           return false;
         }
       }
       return true;
     }).toList();
+  }
+
+  /// Purge learning points within a radius using native (decrypts, checks, deletes).
+  Future<void> purgeLearningPointsWithin(
+    double lat,
+    double lng,
+    double radiusM,
+  ) async {
+    await _geofenceService.purgeLearningPointsWithinNative(lat, lng, radiusM);
   }
 }

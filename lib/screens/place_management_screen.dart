@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/place.dart';
 import '../repositories/place_repository.dart';
+import '../services/event_logger_service.dart';
 import 'place_detail_screen.dart';
 
 class PlaceManagementScreen extends StatefulWidget {
@@ -12,6 +13,7 @@ class PlaceManagementScreen extends StatefulWidget {
 
 class _PlaceManagementScreenState extends State<PlaceManagementScreen> {
   final PlaceRepository _placeRepository = PlaceRepository();
+  final EventLoggerService _logger = EventLoggerService();
   List<Place> _places = [];
   bool _isLoading = true;
 
@@ -38,7 +40,7 @@ class _PlaceManagementScreenState extends State<PlaceManagementScreen> {
   void _showSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Text(message, style: const TextStyle(color: Colors.white)),
         backgroundColor: const Color(0xFF1F1F35),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -71,6 +73,7 @@ class _PlaceManagementScreenState extends State<PlaceManagementScreen> {
       setState(() => _isLoading = true);
       try {
         await _placeRepository.deletePlace(place.id);
+        _logger.logPlaceDeleted(place.label);
         _showSnackBar('Place "${place.label}" deleted.');
         _loadPlaces();
       } catch (e) {
@@ -105,6 +108,7 @@ class _PlaceManagementScreenState extends State<PlaceManagementScreen> {
       setState(() => _isLoading = true);
       try {
         await _placeRepository.reEnterLearningMode(place);
+        _logger.logGeofenceUnregistered(place.label);
         _showSnackBar('Place "${place.label}" reset to learning.');
         _loadPlaces();
       } catch (e) {
@@ -151,17 +155,15 @@ class _PlaceManagementScreenState extends State<PlaceManagementScreen> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
         title: const Text('Manage Places', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF6C63FF)))
-          : _places.isEmpty
-              ? _buildEmptyState()
-              : _buildPlacesList(),
+      body: SafeArea(
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator(color: Color(0xFF6C63FF)))
+            : _places.isEmpty
+                ? _buildEmptyState()
+                : _buildPlacesList(),
+      ),
     );
   }
 

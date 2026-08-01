@@ -13,8 +13,28 @@ class PlaceRepository {
   Future<Place?> getPlace(String id) => _dbService.getPlace(id);
 
   Future<void> addPlace(Place place) async {
-    final updatedPlace = place.copyWith(dirty: true, updatedAt: DateTime.now());
-    await _dbService.insertPlace(updatedPlace);
+    // Route through native for encrypted lat/lng storage
+    final saved = await _geofenceService.savePlace(
+      id: place.id,
+      label: place.label,
+      icon: place.icon.name,
+      lat: place.lat,
+      lng: place.lng,
+      radius: place.radiusM,
+      status: place.status.name,
+      triggerType: place.triggerType.name,
+      createdAt: place.createdAt.toIso8601String(),
+      updatedAt: DateTime.now().toIso8601String(),
+      dirty: 1,
+    );
+    if (!saved) {
+      // Fallback to direct DB write
+      final updatedPlace = place.copyWith(
+        dirty: true,
+        updatedAt: DateTime.now(),
+      );
+      await _dbService.insertPlace(updatedPlace);
+    }
     await _syncQueue.enqueue(
       entityType: 'place',
       entityId: place.id,
@@ -22,20 +42,39 @@ class PlaceRepository {
     );
 
     // If the place is created directly in the confirmed state, register the geofence
-    if (updatedPlace.status == PlaceStatus.confirmed) {
+    if (place.status == PlaceStatus.confirmed) {
       await _geofenceService.registerGeofence(
-        id: updatedPlace.id,
-        lat: updatedPlace.lat,
-        lng: updatedPlace.lng,
-        radius: updatedPlace.radiusM,
-        triggerType: updatedPlace.triggerType.name,
+        id: place.id,
+        lat: place.lat,
+        lng: place.lng,
+        radius: place.radiusM,
+        triggerType: place.triggerType.name,
       );
     }
   }
 
   Future<void> updatePlace(Place place) async {
-    final updatedPlace = place.copyWith(dirty: true, updatedAt: DateTime.now());
-    await _dbService.updatePlace(updatedPlace);
+    // Route through native for encrypted lat/lng storage
+    final saved = await _geofenceService.updatePlaceNative(
+      id: place.id,
+      label: place.label,
+      icon: place.icon.name,
+      lat: place.lat,
+      lng: place.lng,
+      radius: place.radiusM,
+      status: place.status.name,
+      triggerType: place.triggerType.name,
+      updatedAt: DateTime.now().toIso8601String(),
+      dirty: 1,
+    );
+    if (!saved) {
+      // Fallback to direct DB write
+      final updatedPlace = place.copyWith(
+        dirty: true,
+        updatedAt: DateTime.now(),
+      );
+      await _dbService.updatePlace(updatedPlace);
+    }
     await _syncQueue.enqueue(
       entityType: 'place',
       entityId: place.id,
@@ -44,22 +83,24 @@ class PlaceRepository {
 
     // If place is confirmed, register/update its geofence.
     // If it is changed back to learning or archived, unregister the geofence.
-    if (updatedPlace.status == PlaceStatus.confirmed) {
+    if (place.status == PlaceStatus.confirmed) {
       await _geofenceService.registerGeofence(
-        id: updatedPlace.id,
-        lat: updatedPlace.lat,
-        lng: updatedPlace.lng,
-        radius: updatedPlace.radiusM,
-        triggerType: updatedPlace.triggerType.name,
+        id: place.id,
+        lat: place.lat,
+        lng: place.lng,
+        radius: place.radiusM,
+        triggerType: place.triggerType.name,
       );
     } else {
-      await _geofenceService.unregisterGeofence(updatedPlace.id);
+      await _geofenceService.unregisterGeofence(place.id);
     }
   }
 
   Future<void> deletePlace(String id) async {
     // Unregister geofence first
     await _geofenceService.unregisterGeofence(id);
+    // Route through native for encrypted storage
+    await _geofenceService.deletePlaceNative(id);
     await _dbService.deletePlace(id);
     await _syncQueue.enqueue(
       entityType: 'place',
@@ -72,13 +113,13 @@ class PlaceRepository {
     // Unregister geofence
     await _geofenceService.unregisterGeofence(place.id);
 
-    // Update status to learning
-    final updatedPlace = place.copyWith(
-      status: PlaceStatus.learning,
-      dirty: true,
-      updatedAt: DateTime.now(),
+    // Update status to learning via native
+    await _geofenceService.updatePlaceNative(
+      id: place.id,
+      status: PlaceStatus.learning.name,
+      updatedAt: DateTime.now().toIso8601String(),
+      dirty: 1,
     );
-    await _dbService.updatePlace(updatedPlace);
     await _syncQueue.enqueue(
       entityType: 'place',
       entityId: place.id,

@@ -7,11 +7,11 @@ import '../repositories/place_repository.dart';
 import '../repositories/visit_repository.dart';
 import '../services/native_geofence_service.dart';
 import '../services/clustering_service.dart';
+import '../services/event_logger_service.dart';
+import '../widgets/app_shell.dart';
 import 'suggested_places_screen.dart';
-import 'place_management_screen.dart';
 import 'place_detail_screen.dart';
 import 'add_place_modal.dart';
-import 'developer_panel_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -26,13 +26,14 @@ class _DashboardScreenState extends State<DashboardScreen>
   final VisitRepository _visitRepository = VisitRepository();
   final NativeGeofenceService _geofenceService = NativeGeofenceService();
   final ClusteringService _clusteringService = ClusteringService();
+  final EventLoggerService _logger = EventLoggerService();
 
   List<Place> _places = [];
   List<Visit> _visits = [];
   bool _isLearningActive = false;
   int _suggestionCount = 0;
-  String _timeFilter = 'weekly'; // 'daily' | 'weekly' | 'monthly'
-  String _viewMode = 'overview'; // 'overview' | 'timeline'
+  String _timeFilter = 'weekly';
+  String _viewMode = 'overview';
   bool _isLoading = true;
 
   late AnimationController _pulseController;
@@ -50,8 +51,8 @@ class _DashboardScreenState extends State<DashboardScreen>
     _loadData();
     _checkLearningStatus();
 
-    // Subscribe to background geofence events to refresh UI in real-time
     _transitionSub = _geofenceService.transitionStream.listen((event) {
+      _onGeofenceTransition(event);
       _loadData();
     });
 
@@ -70,6 +71,40 @@ class _DashboardScreenState extends State<DashboardScreen>
     super.dispose();
   }
 
+  void _onGeofenceTransition(Map<String, String> event) {
+    final placeId = event['placeId'];
+    final transition = event['transition'];
+    final place = _places.firstWhere(
+      (p) => p.id == placeId,
+      orElse: () => Place(
+        id: placeId ?? '',
+        label: 'Unknown',
+        icon: PlaceIcon.custom,
+        lat: 0,
+        lng: 0,
+        radiusM: 0,
+        status: PlaceStatus.archived,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+        dirty: false,
+      ),
+    );
+
+    switch (transition) {
+      case 'ENTER':
+        _logger.logEntered(place.label, placeId: place.id);
+        break;
+      case 'EXIT':
+        _logger.logLeft(place.label, placeId: place.id);
+        break;
+      case 'DWELL':
+        _logger.logSystem('Dwelling at ${place.label}');
+        break;
+      default:
+        _logger.logSystem('Geofence transition: $transition at ${place.label}');
+    }
+  }
+
   Future<void> _checkLearningStatus() async {
     final active = await _geofenceService.isLearningRunning();
     setState(() {
@@ -84,6 +119,7 @@ class _DashboardScreenState extends State<DashboardScreen>
         setState(() {
           _isLearningActive = false;
         });
+        _logger.logLearningStopped();
         _showSnackBar('Passive location learning mode stopped.');
       }
     } else {
@@ -92,6 +128,7 @@ class _DashboardScreenState extends State<DashboardScreen>
         setState(() {
           _isLearningActive = true;
         });
+        _logger.logLearningStarted();
         _showSnackBar('Passive location learning mode started.');
       }
     }
@@ -126,15 +163,13 @@ class _DashboardScreenState extends State<DashboardScreen>
   void _showSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Text(message, style: const TextStyle(color: Colors.white)),
         backgroundColor: const Color(0xFF1F1F35),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     );
   }
-
-  // --- Calculations ---
 
   Map<String, double> _calculatePlaceHours() {
     final Map<String, double> totals = {};
@@ -156,7 +191,6 @@ class _DashboardScreenState extends State<DashboardScreen>
       if (visit.exitTs != null) {
         durationHours = (visit.durationS ?? 0) / 3600.0;
       } else {
-        // Ongoing visit
         final elapsedS = now.difference(visit.enterTs).inSeconds;
         durationHours = elapsedS / 3600.0;
       }
@@ -165,8 +199,6 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
     return totals;
   }
-
-  // --- Widgets ---
 
   IconData _getIconData(PlaceIcon icon) {
     switch (icon) {
@@ -210,21 +242,18 @@ class _DashboardScreenState extends State<DashboardScreen>
           backgroundColor: const Color(0xFF1F1F35),
           child: CustomScrollView(
             slivers: [
-              // Custom Header
               SliverToBoxAdapter(child: _buildHeader()),
 
-              // Suggested Places Banner
               if (_suggestionCount > 0)
                 SliverToBoxAdapter(child: _buildSuggestionBanner()),
 
-              // View Mode Toggle (Overview | Timeline)
+              SliverToBoxAdapter(child: _buildWebhookStatusCard()),
+
               SliverToBoxAdapter(child: _buildViewModeToggle()),
 
-              // Stats / Time Filter Tabs
               if (_viewMode == 'overview') ...[
                 SliverToBoxAdapter(child: _buildTimeFilterToggle()),
 
-                // Places Summary Grid / Horizontal List
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
@@ -243,13 +272,8 @@ class _DashboardScreenState extends State<DashboardScreen>
                           ),
                         ),
                         TextButton.icon(
-                          onPressed: () async {
-                            await Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => const PlaceManagementScreen(),
-                              ),
-                            );
-                            _loadData();
+                          onPressed: () {
+                            AppShell.of(context).switchToTab(2);
                           },
                           icon: const Icon(Icons.edit_road_outlined, size: 16),
                           label: const Text('Manage'),
@@ -272,7 +296,6 @@ class _DashboardScreenState extends State<DashboardScreen>
                     ),
                   ),
 
-                // Recent Visits Header
                 SliverToBoxAdapter(
                   child: const Padding(
                     padding: EdgeInsets.only(
@@ -365,13 +388,8 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ),
                   const SizedBox(width: 8),
                   GestureDetector(
-                    onTap: () async {
-                      await Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const DeveloperPanelScreen(),
-                        ),
-                      );
-                      _loadData();
+                    onTap: () {
+                      AppShell.of(context).switchToTab(4);
                     },
                     child: Container(
                       padding: const EdgeInsets.all(6),
@@ -399,7 +417,6 @@ class _DashboardScreenState extends State<DashboardScreen>
               ),
             ],
           ),
-          // Passive Learning Mode Switch
           GestureDetector(
             onTap: _toggleLearningMode,
             child: Container(
@@ -429,7 +446,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                           decoration: BoxDecoration(
                             color: const Color(
                               0xFF52B788,
-                            ).withValues(alpha:_pulseController.value),
+                            ).withValues(alpha: _pulseController.value),
                             shape: BoxShape.circle,
                             boxShadow: [
                               BoxShadow(
@@ -483,7 +500,7 @@ class _DashboardScreenState extends State<DashboardScreen>
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF8A2BE2).withValues(alpha:0.3),
+            color: const Color(0xFF8A2BE2).withValues(alpha: 0.3),
             blurRadius: 12,
             offset: const Offset(0, 4),
           ),
@@ -531,7 +548,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha:0.2),
+                    color: Colors.white.withValues(alpha: 0.2),
                     shape: BoxShape.circle,
                   ),
                   child: const Icon(
@@ -545,6 +562,156 @@ class _DashboardScreenState extends State<DashboardScreen>
         ),
       ),
     );
+  }
+
+  Widget _buildWebhookStatusCard() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF16162A),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF22223C), width: 1),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF2A2A44),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(
+              Icons.webhook,
+              color: Color(0xFF6C63FF),
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Webhook Engine',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _isLearningActive
+                      ? 'Active — events queued on-device'
+                      : 'Standby',
+                  style: TextStyle(
+                    color: _isLearningActive
+                        ? const Color(0xFF52B788)
+                        : const Color(0xFFA0A0C0),
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              GestureDetector(
+                onTap: () => _onTestWebhook(),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2A2A44),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Text(
+                    'Test',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: () => _onPurgeHistory(),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: Colors.red.withValues(alpha: 0.3),
+                      width: 1,
+                    ),
+                  ),
+                  child: const Text(
+                    'Purge',
+                    style: TextStyle(
+                      color: Colors.redAccent,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _onTestWebhook() async {
+    _logger.logWebhookDispatched();
+    _showSnackBar('Test webhook dispatched (check server logs)');
+  }
+
+  Future<void> _onPurgeHistory() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1F1F35),
+        title: const Text(
+          'Purge All History?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'This will delete all location logs, visits, and geofence transitions. This cannot be undone.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: Colors.white38),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Purge'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await _geofenceService.purgeAllHistory();
+      _logger.logHistoryPurged();
+      _loadData();
+      _showSnackBar('All history purged');
+    }
   }
 
   Widget _buildViewModeToggle() {
@@ -598,8 +765,13 @@ class _DashboardScreenState extends State<DashboardScreen>
   Widget _buildDayTimeline() {
     final now = DateTime.now();
     final todayStart = DateTime(now.year, now.month, now.day);
-    final todayVisits = _visits.where((v) =>
-        v.enterTs.isAfter(todayStart) || v.enterTs.isAtSameMomentAs(todayStart)).toList();
+    final todayVisits = _visits
+        .where(
+          (v) =>
+              v.enterTs.isAfter(todayStart) ||
+              v.enterTs.isAtSameMomentAs(todayStart),
+        )
+        .toList();
 
     return Padding(
       padding: const EdgeInsets.all(20.0),
@@ -651,14 +823,19 @@ class _DashboardScreenState extends State<DashboardScreen>
                 );
                 final formatter = DateFormat('h:mm a');
                 final enterStr = formatter.format(visit.enterTs);
-                final exitStr = visit.exitTs != null ? formatter.format(visit.exitTs!) : 'Now';
+                final exitStr = visit.exitTs != null
+                    ? formatter.format(visit.exitTs!)
+                    : 'Now';
                 return Container(
                   margin: const EdgeInsets.only(bottom: 8),
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
                     color: const Color(0xFF16162A),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFF22223C), width: 1),
+                    border: Border.all(
+                      color: const Color(0xFF22223C),
+                      width: 1,
+                    ),
                   ),
                   child: Row(
                     children: [
@@ -864,7 +1041,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                             vertical: 2,
                           ),
                           decoration: BoxDecoration(
-                            color: color.withValues(alpha:0.12),
+                            color: color.withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: const Text(
@@ -936,8 +1113,8 @@ class _DashboardScreenState extends State<DashboardScreen>
     String timeText = '';
     String durationText = '';
 
-    final formatter = DateFormat('jm'); // E.g. "5:30 PM"
-    final dayFormatter = DateFormat('MMM d'); // E.g. "Jul 20"
+    final formatter = DateFormat('jm');
+    final dayFormatter = DateFormat('MMM d');
 
     final enterTimeStr = formatter.format(visit.enterTs);
     final dayStr = dayFormatter.format(visit.enterTs);
@@ -1009,7 +1186,7 @@ class _DashboardScreenState extends State<DashboardScreen>
           leading: Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: color.withValues(alpha:0.08),
+              color: color.withValues(alpha: 0.08),
               shape: BoxShape.circle,
             ),
             child: Icon(_getIconData(place.icon), color: color, size: 20),
